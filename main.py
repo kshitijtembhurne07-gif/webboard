@@ -1,7 +1,7 @@
 import logging
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from database import engine, Base, SessionLocal
@@ -48,19 +48,41 @@ app.include_router(auth.router)
 app.include_router(notices.router)
 app.include_router(timetable.router)
 
-# Health check
-@app.get("/")
-def root():
-    return {
-        "app": "NoticePulse API",
-        "status": "online",
-        "version": "1.0.0",
-        "realtime_ws": "/ws/notices"
-    }
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 
+DIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dist")
+
+# Health check
 @app.get("/api/health")
 def health_check():
     return {"status": "ok", "active_ws_clients": len(ws_manager.active_connections)}
+
+# If frontend dist folder is built, serve production static assets and SPA fallback
+if os.path.exists(DIST_DIR):
+    assets_dir = os.path.join(DIST_DIR, "assets")
+    if os.path.exists(assets_dir):
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str):
+        if full_path.startswith("api") or full_path.startswith("docs") or full_path.startswith("openapi.json") or full_path.startswith("ws"):
+            raise HTTPException(status_code=404, detail="Not found")
+        file_path = os.path.join(DIST_DIR, full_path)
+        if os.path.exists(file_path) and os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(DIST_DIR, "index.html"))
+else:
+    @app.get("/")
+    def root():
+        return {
+            "app": "NoticePulse API",
+            "status": "online",
+            "version": "1.0.0",
+            "realtime_ws": "/ws/notices"
+        }
+
 
 # WebSocket Endpoint for instant push alerts and live updates
 @app.websocket("/ws/notices")
